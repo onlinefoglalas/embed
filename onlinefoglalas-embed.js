@@ -9,7 +9,7 @@
     class OnlinefoglalasEmbed {
         constructor(config) {
             this.config = {
-                container: config.container || 'booknetic-embed',
+                container: config.container || 'onlinefoglalas-embed',
                 domain: config.domain || '',
                 locale: config.locale || 'hu',
                 height: config.height || 'auto',
@@ -30,7 +30,6 @@
 
         init() {
             if (this.initialized) {
-                console.warn('BookneticEmbed: Already initialized');
                 return;
             }
 
@@ -42,7 +41,7 @@
             }
 
             if (!this.container) {
-                console.error('BookneticEmbed: Container not found');
+                console.error('OnlinefoglalasEmbed: Container not found');
                 if (this.config.onError) {
                     this.config.onError('Container not found');
                 }
@@ -50,7 +49,7 @@
             }
 
             if (!this.config.domain) {
-                console.error('BookneticEmbed: Domain is required');
+                console.error('OnlinefoglalasEmbed: Domain is required');
                 if (this.config.onError) {
                     this.config.onError('Domain is required');
                 }
@@ -349,13 +348,10 @@
 
     // Expose to global scope
     window.OnlinefoglalasEmbed = OnlinefoglalasEmbed;
-    
-    // Backwards compatibility alias
-    window.BookneticEmbed = OnlinefoglalasEmbed;
 
     // Auto-initialize from data attributes
     document.addEventListener('DOMContentLoaded', function() {
-        const embedElements = document.querySelectorAll('[data-onlinefoglalas-embed], [data-booknetic-embed]');
+        const embedElements = document.querySelectorAll('[data-onlinefoglalas-embed]');
         
         embedElements.forEach(element => {
             const credentialsAttr = element.getAttribute('data-credentials');
