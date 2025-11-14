@@ -176,7 +176,8 @@
                     method: 'GET',
                     headers: {
                         'X-Requested-With': 'XMLHttpRequest'
-                    }
+                    },
+                    cache: 'no-store' // Bypass Cloudflare cache for initial load
                 };
                 
                 // Only include credentials if enabled (needed for session/cookies)
@@ -234,14 +235,18 @@
         async executeScripts(container) {
             const scripts = container.querySelectorAll('script');
             
+            console.log(`OnlinefoglalasEmbed: Found ${scripts.length} scripts to execute`);
+            
             // Execute scripts sequentially to maintain proper order
             for (let i = 0; i < scripts.length; i++) {
                 const oldScript = scripts[i];
-                await this.loadScript(oldScript);
+                await this.loadScript(oldScript, i);
             }
+            
+            console.log('OnlinefoglalasEmbed: All scripts executed');
         }
         
-        loadScript(oldScript) {
+        loadScript(oldScript, index) {
             return new Promise((resolve, reject) => {
                 const newScript = document.createElement('script');
                 
@@ -252,11 +257,14 @@
                 
                 if (oldScript.src) {
                     // External script - wait for it to load
+                    console.log(`OnlinefoglalasEmbed: Loading external script #${index}:`, oldScript.src);
+                    
                     newScript.onload = () => {
+                        console.log(`OnlinefoglalasEmbed: External script #${index} loaded`);
                         resolve();
                     };
                     newScript.onerror = () => {
-                        console.warn('Failed to load script:', oldScript.src);
+                        console.warn(`OnlinefoglalasEmbed: Failed to load script #${index}:`, oldScript.src);
                         resolve(); // Continue even if one script fails
                     };
                     
@@ -265,10 +273,15 @@
                     newScript.src = oldScript.src;
                 } else {
                     // Inline script - execute immediately
+                    const scriptPreview = oldScript.textContent.substring(0, 100).replace(/\n/g, ' ');
+                    console.log(`OnlinefoglalasEmbed: Executing inline script #${index}:`, scriptPreview + '...');
+                    
                     newScript.textContent = oldScript.textContent;
                     
                     // Replace the old script with the new one
                     oldScript.parentNode.replaceChild(newScript, oldScript);
+                    
+                    console.log(`OnlinefoglalasEmbed: Inline script #${index} executed`);
                     
                     // Inline scripts execute synchronously, but give them a tick to complete
                     setTimeout(resolve, 0);
@@ -350,7 +363,7 @@
     window.OnlinefoglalasEmbed = OnlinefoglalasEmbed;
 
     // Auto-initialize from data attributes
-    function initializeEmbedElements() {
+    document.addEventListener('DOMContentLoaded', function() {
         const embedElements = document.querySelectorAll('[data-onlinefoglalas-embed]');
         
         embedElements.forEach(element => {
@@ -369,16 +382,7 @@
             
             new OnlinefoglalasEmbed(config);
         });
-    }
-    
-    // Check if DOM is already loaded
-    if (document.readyState === 'loading') {
-        // DOM is still loading, wait for it
-        document.addEventListener('DOMContentLoaded', initializeEmbedElements);
-    } else {
-        // DOM is already loaded, initialize immediately
-        initializeEmbedElements();
-    }
+    });
 
 })();
 
