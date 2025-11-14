@@ -350,7 +350,7 @@
     window.OnlinefoglalasEmbed = OnlinefoglalasEmbed;
 
     // Auto-initialize from data attributes
-    document.addEventListener('DOMContentLoaded', function() {
+    function initializeEmbedElements() {
         const embedElements = document.querySelectorAll('[data-onlinefoglalas-embed]');
         
         embedElements.forEach(element => {
@@ -369,7 +369,16 @@
             
             new OnlinefoglalasEmbed(config);
         });
-    });
+    }
+    
+    // Check if DOM is already loaded
+    if (document.readyState === 'loading') {
+        // DOM is still loading, wait for it
+        document.addEventListener('DOMContentLoaded', initializeEmbedElements);
+    } else {
+        // DOM is already loaded, initialize immediately
+        initializeEmbedElements();
+    }
 
 })();
 
