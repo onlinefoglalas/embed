@@ -16,7 +16,7 @@
                 width: config.width || '100%',
                 baseUrl: config.baseUrl || 'https://onlinefoglalas.hu',
                 credentials: config.credentials !== undefined ? config.credentials : true,
-                useShadowDOM: config.useShadowDOM !== undefined ? config.useShadowDOM : true,
+                useShadowDOM: config.useShadowDOM !== undefined ? config.useShadowDOM : false,
                 cssIsolation: config.cssIsolation !== undefined ? config.cssIsolation : true,
                 onLoad: config.onLoad || null,
                 onError: config.onError || null
