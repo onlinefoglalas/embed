@@ -3,11 +3,23 @@
  * This script allows embedding tenant booking pages without iframes
  */
 
+'use strict';
+
+// Provide an early placeholder to avoid ReferenceError if someone calls OnlinefoglalasEmbed
+// before this file finishes evaluating (e.g. async load order or inline calls)
+if (typeof window !== 'undefined' && typeof window.OnlinefoglalasEmbed === 'undefined') {
+    window.__OnlinefoglalasEmbedQueue = [];
+    window.OnlinefoglalasEmbed = function(config) {
+        window.__OnlinefoglalasEmbedQueue.push(config);
+    };
+}
+
 (function() {
     'use strict';
 
     class OnlinefoglalasEmbed {
         constructor(config) {
+            
             this.config = {
                 container: config.container || 'onlinefoglalas-embed',
                 domain: config.domain || '',
@@ -17,18 +29,21 @@
                 baseUrl: config.baseUrl || 'https://onlinefoglalas.hu',
                 credentials: config.credentials !== undefined ? config.credentials : true,
                 useShadowDOM: config.useShadowDOM !== undefined ? config.useShadowDOM : false,
-                cssIsolation: config.cssIsolation !== undefined ? config.cssIsolation : true,
+                cssIsolation: config.cssIsolation !== undefined ? config.cssIsolation : false,
                 onLoad: config.onLoad || null,
                 onError: config.onError || null
             };
+            
 
             this.container = null;
             this.shadowRoot = null;
             this.initialized = false;
+            
             this.init();
         }
 
         init() {
+            
             if (this.initialized) {
                 return;
             }
@@ -41,12 +56,12 @@
             }
 
             if (!this.container) {
-                console.error('OnlinefoglalasEmbed: Container not found');
                 if (this.config.onError) {
                     this.config.onError('Container not found');
                 }
                 return;
             }
+            
 
             if (!this.config.domain) {
                 console.error('OnlinefoglalasEmbed: Domain is required');
@@ -55,6 +70,7 @@
                 }
                 return;
             }
+            
 
             // Setup CSS isolation wrapper
             if (this.config.cssIsolation) {
@@ -154,6 +170,7 @@
         buildUrl() {
             let url = this.config.baseUrl;
             
+            
             // Add locale prefix if not Hungarian
             if (this.config.locale && this.config.locale !== 'hu') {
                 url += '/' + this.config.locale;
@@ -169,6 +186,7 @@
         }
 
         async loadContent() {
+            
             try {
                 const url = this.buildUrl();
                 
@@ -183,9 +201,12 @@
                 // Only include credentials if enabled (needed for session/cookies)
                 if (this.config.credentials) {
                     fetchOptions.credentials = 'include';
+                } else {
                 }
                 
+                const fetchStartTime = performance.now();
                 const response = await fetch(url, fetchOptions);
+                const fetchEndTime = performance.now();
 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
@@ -214,6 +235,14 @@
                 // Execute scripts in order (await to ensure proper sequence)
                 await this.executeScripts(wrapper);
 
+                // Wait for step scripts to register their hooks before initialization
+                // This is critical for embed mode where scripts load asynchronously
+                await this.waitForStepScripts(wrapper);
+
+                // Ensure booking panel is initialized
+                // The inline script #0 tries to initialize, but it might run before booknetic.js loads
+                await this.ensureBookingPanelInitialized(wrapper);
+
                 // Setup window communication
                 this.setupCommunication();
 
@@ -228,27 +257,72 @@
 
             } catch (error) {
                 console.error('OnlinefoglalasEmbed: Error loading content', error);
+                console.error('OnlinefoglalasEmbed: Error stack:', error.stack);
                 this.showError('Nem sikerült betölteni a tartalmat. Kérjük, próbálja újra később.');
             }
         }
 
         async executeScripts(container) {
-            const scripts = container.querySelectorAll('script');
-            
-            console.log(`OnlinefoglalasEmbed: Found ${scripts.length} scripts to execute`);
-            
-            // Execute scripts sequentially to maintain proper order
-            for (let i = 0; i < scripts.length; i++) {
-                const oldScript = scripts[i];
-                await this.loadScript(oldScript, i);
+            const scripts = Array.from(container.querySelectorAll('script'));
+            const externals = [];
+            const inlineConfig = [];
+            const inlineInit = [];
+            const inlineOther = [];
+
+            // Bucket scripts while preserving their relative order inside each bucket
+            scripts.forEach((script, idx) => {
+                if (script.src) {
+                    externals.push({ script, idx });
+                    return;
+                }
+
+                const text = script.textContent || '';
+                const isInit = /bookneticInitBookingPage|initBookingPanel/i.test(text);
+                const isConfig = /(BookneticData|BookneticConversionTrackingData|servicesWithCustomDuration|current_locale|window\.bookneticHooks)/i.test(text);
+
+                if (isInit) {
+                    inlineInit.push({ script, idx });
+                } else if (isConfig) {
+                    inlineConfig.push({ script, idx });
+                } else {
+                    inlineOther.push({ script, idx });
+                }
+            });
+
+            // Run config inlines first (they define globals expected by externals)
+            for (const item of inlineConfig) {
+                await this.loadScript(item.script, item.idx);
             }
-            
-            console.log('OnlinefoglalasEmbed: All scripts executed');
+
+            // Run all external scripts in order (booknetic.js and deps)
+            for (const item of externals) {
+                await this.loadScript(item.script, item.idx);
+            }
+
+            // Then other inline helpers
+            for (const item of inlineOther) {
+                await this.loadScript(item.script, item.idx);
+            }
+
+            // Finally, run inline init scripts (they rely on everything above)
+            for (const item of inlineInit) {
+                await this.loadScript(item.script, item.idx);
+            }
+
         }
         
         loadScript(oldScript, index) {
             return new Promise((resolve, reject) => {
                 const newScript = document.createElement('script');
+                const type = (oldScript.type || '').trim();
+                const isModule = type === 'module';
+                const isClassic = type === '' || type === 'text/javascript' || type === 'application/javascript';
+                const isExecutable = isClassic || isModule;
+
+                if (!isExecutable) {
+                    // Keep the script in place so templates/data remain available
+                    return resolve();
+                }
                 
                 // Copy all attributes
                 Array.from(oldScript.attributes).forEach(attr => {
@@ -257,10 +331,8 @@
                 
                 if (oldScript.src) {
                     // External script - wait for it to load
-                    console.log(`OnlinefoglalasEmbed: Loading external script #${index}:`, oldScript.src);
                     
                     newScript.onload = () => {
-                        console.log(`OnlinefoglalasEmbed: External script #${index} loaded`);
                         resolve();
                     };
                     newScript.onerror = () => {
@@ -274,18 +346,127 @@
                 } else {
                     // Inline script - execute immediately
                     const scriptPreview = oldScript.textContent.substring(0, 100).replace(/\n/g, ' ');
-                    console.log(`OnlinefoglalasEmbed: Executing inline script #${index}:`, scriptPreview + '...');
                     
                     newScript.textContent = oldScript.textContent;
                     
                     // Replace the old script with the new one
                     oldScript.parentNode.replaceChild(newScript, oldScript);
                     
-                    console.log(`OnlinefoglalasEmbed: Inline script #${index} executed`);
                     
                     // Inline scripts execute synchronously, but give them a tick to complete
                     setTimeout(resolve, 0);
                 }
+            });
+        }
+
+        async waitForStepScripts(wrapper) {
+            // Wait for step scripts to register their hooks
+            // Step scripts register hooks like 'before_step_loading' for each step
+            // This is critical in embed mode where scripts load asynchronously
+            const maxWaitTime = 3000; // Maximum 3 seconds
+            const checkInterval = 50; // Check every 50ms
+            const startTime = Date.now();
+            
+            return new Promise((resolve) => {
+                const checkHooks = () => {
+                    const elapsed = Date.now() - startTime;
+                    
+                    // Check if bookneticHooks is available
+                    if (typeof window.bookneticHooks === 'undefined') {
+                        if (elapsed < maxWaitTime) {
+                            setTimeout(checkHooks, checkInterval);
+                        } else {
+                            console.warn('OnlinefoglalasEmbed: Timeout waiting for bookneticHooks');
+                            resolve();
+                        }
+                        return;
+                    }
+                    
+                    // Check if hooks are registered
+                    const hooks = window.bookneticHooks.hooks || {};
+                    const beforeStepLoadingHooks = hooks['before_step_loading'] || {};
+                    const registeredHooks = Object.keys(beforeStepLoadingHooks).length;
+                    
+                    
+                    // If we have hooks registered, or if we've waited at least 500ms, proceed
+                    // The 500ms gives step scripts time to load and register even if they're still loading
+                    if (registeredHooks > 0 || elapsed >= 500) {
+                        resolve();
+                    } else if (elapsed < maxWaitTime) {
+                        setTimeout(checkHooks, checkInterval);
+                    } else {
+                        console.warn('OnlinefoglalasEmbed: Timeout waiting for step scripts, proceeding anyway...');
+                        resolve();
+                    }
+                };
+                
+                // Start checking after a short delay to allow scripts to execute
+                setTimeout(checkHooks, 100);
+            });
+        }
+
+        async ensureBookingPanelInitialized(wrapper) {
+            // Ensure that bookneticInitBookingPage is called
+            // The inline script #0 tries to initialize, but it might run before booknetic.js loads
+            const maxWaitTime = 2000; // Maximum 2 seconds
+            const checkInterval = 50; // Check every 50ms
+            const startTime = Date.now();
+            
+            return new Promise((resolve) => {
+                const checkAndInit = () => {
+                    const elapsed = Date.now() - startTime;
+                    
+                    // Check if bookneticInitBookingPage is available
+                    if (typeof window.bookneticInitBookingPage === 'undefined') {
+                        if (elapsed < maxWaitTime) {
+                            setTimeout(checkAndInit, checkInterval);
+                        } else {
+                            console.warn('OnlinefoglalasEmbed: Timeout waiting for bookneticInitBookingPage');
+                            resolve();
+                        }
+                        return;
+                    }
+                    
+                    // Check if jQuery is available
+                    if (typeof jQuery === 'undefined') {
+                        if (elapsed < maxWaitTime) {
+                            setTimeout(checkAndInit, checkInterval);
+                        } else {
+                            console.warn('OnlinefoglalasEmbed: Timeout waiting for jQuery');
+                            resolve();
+                        }
+                        return;
+                    }
+                    
+                    // Find all booking panels in the wrapper
+                    const bookingPanels = wrapper.querySelectorAll('.booknetic_appointment');
+                    
+                    if (bookingPanels.length === 0) {
+                        resolve();
+                        return;
+                    }
+                    
+                    // Check if panels are already initialized
+                    let allInitialized = true;
+                    bookingPanels.forEach(panel => {
+                        const $panel = jQuery(panel);
+                        const isInitialized = $panel.data('booknetic_has_been_initiated') === true;
+                        if (!isInitialized) {
+                            allInitialized = false;
+                            // Manually initialize the booking panel
+                            try {
+                                window.bookneticInitBookingPage(panel);
+                            } catch (e) {
+                                console.error('OnlinefoglalasEmbed: Error initializing booking panel:', e);
+                            }
+                        }
+                    });
+                    
+                    resolve();
+                };
+                
+                // Start checking after a short delay to allow scripts to execute
+                setTimeout(checkAndInit, 100);
             });
         }
 
@@ -359,14 +540,32 @@
         }
     }
 
-    // Expose to global scope
+    // Expose to global scope as early as possible so consumers don't hit ReferenceError
     window.OnlinefoglalasEmbed = OnlinefoglalasEmbed;
 
+    // Drain any queued calls that happened before the real class was ready
+    if (Array.isArray(window.__OnlinefoglalasEmbedQueue) && window.__OnlinefoglalasEmbedQueue.length > 0) {
+        window.__OnlinefoglalasEmbedQueue.forEach((queuedConfig) => {
+            try {
+                new OnlinefoglalasEmbed(queuedConfig);
+            } catch (e) {
+                console.error('OnlinefoglalasEmbed: Error processing queued init', e);
+            }
+        });
+        window.__OnlinefoglalasEmbedQueue = [];
+    }
+
     // Auto-initialize from data attributes
-    document.addEventListener('DOMContentLoaded', function() {
+    const initEmbedElements = function(trigger) {
+
         const embedElements = document.querySelectorAll('[data-onlinefoglalas-embed]');
         
-        embedElements.forEach(element => {
+        embedElements.forEach((element, index) => {
+            // Avoid initializing the same element multiple times
+            if (element.dataset.onlinefoglalasEmbedInitialized === 'true') {
+                return;
+            }
+            
             const credentialsAttr = element.getAttribute('data-credentials');
             const credentials = credentialsAttr === 'false' ? false : true;
             
@@ -381,8 +580,58 @@
             };
             
             new OnlinefoglalasEmbed(config);
+            element.dataset.onlinefoglalasEmbedInitialized = 'true';
         });
-    });
+    };
+
+    let mutationScheduled = false;
+
+    try {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => initEmbedElements('DOMContentLoaded'));
+        } else {
+            // DOMContentLoaded already fired (e.g. script loaded after DOM ready) – run immediately
+            initEmbedElements('immediate');
+        }
+
+        // Observe for dynamically added embed elements (e.g. SPA / late render)
+        if (typeof MutationObserver !== 'undefined') {
+            const observer = new MutationObserver((mutations) => {
+                // Only react if mutations might contain the data attribute
+                let hasPotentialEmbed = false;
+                for (const mutation of mutations) {
+                    for (const node of mutation.addedNodes) {
+                        if (node.nodeType === 1) {
+                            if (node.hasAttribute && node.hasAttribute('data-onlinefoglalas-embed')) {
+                                hasPotentialEmbed = true;
+                                break;
+                            }
+                            if (node.querySelector && node.querySelector('[data-onlinefoglalas-embed]')) {
+                                hasPotentialEmbed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasPotentialEmbed) break;
+                }
+
+                if (!hasPotentialEmbed) {
+                    return;
+                }
+
+                // Debounce to avoid log spam when many nodes are added
+                if (!mutationScheduled) {
+                    mutationScheduled = true;
+                    setTimeout(() => {
+                        mutationScheduled = false;
+                        initEmbedElements('mutation');
+                    }, 50);
+                }
+            });
+            observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
+        }
+    } catch (e) {
+        console.error('OnlinefoglalasEmbed: Auto-init error', e);
+    }
 
 })();
-
